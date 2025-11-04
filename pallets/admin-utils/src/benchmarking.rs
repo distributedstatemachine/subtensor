@@ -18,7 +18,8 @@ use super::*;
 #[benchmarks]
 mod benchmarks {
     use super::*;
-    use subtensor_runtime_common::NetUid;
+    use pallet_subtensor::{SubnetAlphaIn, SubnetTAO};
+    use subtensor_runtime_common::{AlphaCurrency, NetUid, TaoCurrency};
 
     #[benchmark]
     fn swap_authorities(a: Linear<0, 32>) {
@@ -625,6 +626,128 @@ mod benchmarks {
 
         #[extrinsic_call]
 		_(RawOrigin::Root, 1u16.into()/*netuid*/, 256u16/*max_n*/)/*sudo_trim_to_max_allowed_uids()*/;
+    }
+
+    #[benchmark]
+    fn sudo_propose_merger() {
+        // Disable admin freeze window
+        pallet_subtensor::Pallet::<T>::set_admin_freeze_window(0);
+
+        // Setup two subnets for merger
+        let alpha_netuid = NetUid::from(1);
+        let beta_netuid = NetUid::from(2);
+
+        pallet_subtensor::Pallet::<T>::init_new_network(alpha_netuid, 1u16 /*tempo*/);
+        pallet_subtensor::Pallet::<T>::init_new_network(beta_netuid, 1u16 /*tempo*/);
+
+        // Setup reserves for merger (required for liquidity checks)
+        let tao_reserve: TaoCurrency = 10_000_000_000_000u64.into(); // 10 TAO
+        let alpha_reserve: AlphaCurrency = (10_000_000_000_000u64 / 2).into();
+        SubnetTAO::<T>::set(alpha_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(alpha_netuid, alpha_reserve);
+        SubnetTAO::<T>::set(beta_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(beta_netuid, alpha_reserve);
+
+        #[extrinsic_call]
+        _(RawOrigin::Root, alpha_netuid, beta_netuid);
+    }
+
+    #[benchmark]
+    fn sudo_approve_merger() {
+        // Disable admin freeze window
+        pallet_subtensor::Pallet::<T>::set_admin_freeze_window(0);
+
+        // Setup two subnets for merger
+        let alpha_netuid = NetUid::from(1);
+        let beta_netuid = NetUid::from(2);
+
+        pallet_subtensor::Pallet::<T>::init_new_network(alpha_netuid, 1u16 /*tempo*/);
+        pallet_subtensor::Pallet::<T>::init_new_network(beta_netuid, 1u16 /*tempo*/);
+
+        // Setup reserves for merger (required for liquidity checks)
+        let tao_reserve: TaoCurrency = 10_000_000_000_000u64.into(); // 10 TAO
+        let alpha_reserve: AlphaCurrency = (10_000_000_000_000u64 / 2).into();
+        SubnetTAO::<T>::set(alpha_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(alpha_netuid, alpha_reserve);
+        SubnetTAO::<T>::set(beta_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(beta_netuid, alpha_reserve);
+
+        // Propose merger first
+        let _ = pallet_subtensor::Pallet::<T>::do_propose_merger(
+            pallet_subtensor::Pallet::<T>::get_subnet_owner(alpha_netuid),
+            alpha_netuid,
+            beta_netuid,
+        );
+
+        #[extrinsic_call]
+        _(RawOrigin::Root, alpha_netuid, beta_netuid);
+    }
+
+    #[benchmark]
+    fn sudo_execute_merger() {
+        // Disable admin freeze window
+        pallet_subtensor::Pallet::<T>::set_admin_freeze_window(0);
+
+        // Setup two subnets for merger
+        let alpha_netuid = NetUid::from(1);
+        let beta_netuid = NetUid::from(2);
+
+        pallet_subtensor::Pallet::<T>::init_new_network(alpha_netuid, 1u16 /*tempo*/);
+        pallet_subtensor::Pallet::<T>::init_new_network(beta_netuid, 1u16 /*tempo*/);
+
+        // Setup reserves for merger (required for liquidity checks)
+        let tao_reserve: TaoCurrency = 10_000_000_000_000u64.into(); // 10 TAO
+        let alpha_reserve: AlphaCurrency = (10_000_000_000_000u64 / 2).into();
+        SubnetTAO::<T>::set(alpha_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(alpha_netuid, alpha_reserve);
+        SubnetTAO::<T>::set(beta_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(beta_netuid, alpha_reserve);
+
+        // Propose and approve merger first
+        let alpha_owner = pallet_subtensor::Pallet::<T>::get_subnet_owner(alpha_netuid);
+        let beta_owner = pallet_subtensor::Pallet::<T>::get_subnet_owner(beta_netuid);
+
+        let _ = pallet_subtensor::Pallet::<T>::do_propose_merger(
+            alpha_owner.clone(),
+            alpha_netuid,
+            beta_netuid,
+        );
+        let _ =
+            pallet_subtensor::Pallet::<T>::do_approve_merger(beta_owner, alpha_netuid, beta_netuid);
+
+        #[extrinsic_call]
+        _(RawOrigin::Root, alpha_netuid);
+    }
+
+    #[benchmark]
+    fn sudo_cancel_merger() {
+        // Disable admin freeze window
+        pallet_subtensor::Pallet::<T>::set_admin_freeze_window(0);
+
+        // Setup two subnets for merger
+        let alpha_netuid = NetUid::from(1);
+        let beta_netuid = NetUid::from(2);
+
+        pallet_subtensor::Pallet::<T>::init_new_network(alpha_netuid, 1u16 /*tempo*/);
+        pallet_subtensor::Pallet::<T>::init_new_network(beta_netuid, 1u16 /*tempo*/);
+
+        // Setup reserves for merger (required for liquidity checks)
+        let tao_reserve: TaoCurrency = 10_000_000_000_000u64.into(); // 10 TAO
+        let alpha_reserve: AlphaCurrency = (10_000_000_000_000u64 / 2).into();
+        SubnetTAO::<T>::set(alpha_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(alpha_netuid, alpha_reserve);
+        SubnetTAO::<T>::set(beta_netuid, tao_reserve);
+        SubnetAlphaIn::<T>::set(beta_netuid, alpha_reserve);
+
+        // Propose merger first so we can cancel it
+        let _ = pallet_subtensor::Pallet::<T>::do_propose_merger(
+            pallet_subtensor::Pallet::<T>::get_subnet_owner(alpha_netuid),
+            alpha_netuid,
+            beta_netuid,
+        );
+
+        #[extrinsic_call]
+        _(RawOrigin::Root, alpha_netuid);
     }
 
     //impl_benchmark_test_suite!(AdminUtils, crate::mock::new_test_ext(), crate::mock::Test);

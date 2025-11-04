@@ -96,7 +96,7 @@ pub mod pallet {
     use sp_std::collections::vec_deque::VecDeque;
     use sp_std::vec;
     use sp_std::vec::Vec;
-    use substrate_fixed::types::{I64F64, I96F32, U64F64};
+    use substrate_fixed::types::{I64F64, I96F32, U64F64, U96F32};
     use subtensor_macros::freeze_struct;
     use subtensor_runtime_common::{
         AlphaCurrency, Currency, MechId, NetUid, NetUidStorageIndex, TaoCurrency,
@@ -335,6 +335,47 @@ pub mod pallet {
         Swap,
         /// Keep all alpha emission.
         Keep,
+    }
+
+    /// ============================
+    /// ==== Subnet Mergers ====
+    /// ============================
+
+    /// Status of a subnet merger proposal
+    #[derive(TypeInfo, Encode, Decode, DecodeWithMemTracking, Clone, PartialEq, Eq, Debug)]
+    pub enum MergerStatus {
+        /// Proposal created, awaiting beta subnet owner consent
+        Proposed,
+        /// Both parties have consented, awaiting execution
+        Approved,
+        /// Merger was rejected by beta owner
+        Rejected,
+        /// Merger execution in progress
+        Executing,
+    }
+
+    /// Snapshot of pool state for validation
+    #[derive(Encode, Decode, Clone, PartialEq, Eq, RuntimeDebug, TypeInfo)]
+    pub struct PoolSnapshot {
+        /// TAO reserve in the pool
+        pub tao_reserve: TaoCurrency,
+        /// Alpha token reserve in the pool
+        pub alpha_reserve: AlphaCurrency,
+        /// Alpha tokens out (emissions)
+        pub alpha_out: AlphaCurrency,
+        /// Pool price (TAO per alpha)
+        pub price: U96F32,
+        /// Number of unique stakers
+        pub total_stakers: u32,
+    }
+
+    /// Result of token conversion calculation
+    #[derive(Clone, PartialEq, Eq, RuntimeDebug)]
+    pub struct ConversionResult {
+        /// New alpha token amount after conversion
+        pub new_alpha_amount: U64F64,
+        /// Change in redeemability (should be 0 or positive)
+        pub redeemability_delta: i128,
     }
 
     /// Enum for the per-coldkey root claim frequency setting.
@@ -1461,6 +1502,41 @@ pub mod pallet {
     /// --- MAP ( netuid ) --> subnet_owner_hotkey
     pub type SubnetOwnerHotkey<T: Config> =
         StorageMap<_, Identity, NetUid, T::AccountId, ValueQuery, DefaultSubnetOwner<T>>;
+
+    // Subnet Merger Storage Items
+    #[pallet::storage]
+    /// Records completed mergers: merged_netuid -> (merged_into_netuid, block_number)
+    /// The key is the beta (deleted) subnet, value is (alpha, block) it was merged into
+    pub type MergerHistory<T: Config> = StorageMap<
+        _,
+        Identity,
+        NetUid,                      // Subnet that was merged (beta)
+        (NetUid, BlockNumberFor<T>), // (alpha, block when merged)
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    /// Tracks pending merger proposals: alpha_netuid -> (beta_netuid, proposal_block, status)
+    pub type PendingMerger<T: Config> = StorageMap<
+        _,
+        Identity,
+        NetUid,                                    // Alpha (proposer)
+        (NetUid, BlockNumberFor<T>, MergerStatus), // (Beta, block, status)
+        OptionQuery,
+    >;
+
+    #[pallet::storage]
+    /// Stores consent from beta subnet for merger: (alpha, beta) -> consent_given
+    pub type MergerConsent<T: Config> = StorageDoubleMap<
+        _,
+        Identity,
+        NetUid, // Alpha netuid
+        Identity,
+        NetUid, // Beta netuid
+        bool,   // Consent given
+        ValueQuery,
+    >;
+
     #[pallet::storage]
     /// --- MAP ( netuid ) --> recycle_or_burn
     pub type RecycleOrBurn<T: Config> =

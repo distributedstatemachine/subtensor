@@ -467,5 +467,82 @@ mod events {
             /// Claim type
             root_claim_type: RootClaimTypeEnum,
         },
+
+        // Subnet Merger Events
+        /// A subnet merger has been proposed.
+        MergerProposed {
+            /// The alpha (surviving) subnet
+            alpha: NetUid,
+            /// The beta (to be merged) subnet
+            beta: NetUid,
+            /// Account that proposed the merger
+            proposer: T::AccountId,
+            /// Block number when proposal was created
+            block: BlockNumberFor<T>,
+        },
+
+        /// A subnet merger proposal has been approved.
+        MergerApproved {
+            /// The alpha (surviving) subnet
+            alpha: NetUid,
+            /// The beta (to be merged) subnet
+            beta: NetUid,
+            /// Account that approved the merger (beta owner)
+            approver: T::AccountId,
+        },
+
+        /// A subnet merger has been successfully executed.
+        MergerExecuted {
+            /// The alpha (surviving) subnet
+            alpha: NetUid,
+            /// The beta (merged/deleted) subnet
+            beta: NetUid,
+            /// Block number when merger was executed
+            block: BlockNumberFor<T>,
+        },
+
+        /// A subnet merger proposal has been cancelled.
+        MergerCancelled {
+            /// The alpha subnet
+            alpha: NetUid,
+            /// The beta subnet
+            beta: NetUid,
+            /// Account that cancelled the merger
+            cancelled_by: T::AccountId,
+        },
+
+        /// Tokens have been converted for a holder during merger.
+        TokensConverted {
+            /// Account whose tokens were converted
+            account: T::AccountId,
+            /// Source subnet (alpha or beta)
+            source_netuid: NetUid,
+            /// Target subnet (alpha)
+            target_netuid: NetUid,
+            /// Original token amount
+            old_amount: u64,
+            /// New converted token amount
+            new_amount: u64,
+        },
+
+        /// Pools have been consolidated during merger.
+        PoolsConsolidated {
+            /// The alpha (surviving) subnet
+            alpha: NetUid,
+            /// The beta (merged) subnet
+            beta: NetUid,
+            /// New TAO reserve in alpha pool
+            new_tao_reserve: TaoCurrency,
+            /// New alpha token reserve
+            new_alpha_reserve: AlphaCurrency,
+            /// Amount of new alpha minted
+            delta_alpha_minted: AlphaCurrency,
+        },
+
+        /// A merged subnet has been cleaned up.
+        SubnetCleaned {
+            /// The subnet that was cleaned (beta)
+            netuid: NetUid,
+        },
     }
 }

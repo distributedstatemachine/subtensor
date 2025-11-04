@@ -2169,6 +2169,151 @@ pub mod pallet {
             log::debug!("set_tao_flow_smoothing_factor( {smoothing_factor:?} ) ");
             Ok(())
         }
+
+        /// Proposes merging two subnets (beta (child) into alpha (mother)).
+        ///
+        /// # Arguments
+        /// * `origin` - The origin of the call, which must be root or the alpha subnet owner.
+        /// * `alpha_netuid` - The netuid of the first subnet (typically the larger one).
+        /// * `beta_netuid` - The netuid of the second subnet to merge into alpha.
+        ///
+        /// # Errors
+        /// * `BadOrigin` - If the caller is not root or the alpha subnet owner.
+        /// * `SubnetDoesNotExist` - If either subnet doesn't exist.
+        /// * `CannotMergeWithSelf` - If alpha and beta are the same subnet.
+        /// * `MergerAlreadyPending` - If a merger proposal already exists for alpha.
+        ///
+        /// # Weight
+        /// Weight accounts for storage reads and writes for merger proposal creation.
+        #[pallet::call_index(84)]
+        #[pallet::weight((
+            Weight::from_parts(25_000_000, 0)
+                .saturating_add(T::DbWeight::get().reads(5_u64))
+                .saturating_add(T::DbWeight::get().writes(2_u64)),
+            DispatchClass::Operational,
+            Pays::Yes
+        ))]
+        pub fn sudo_propose_merger(
+            origin: OriginFor<T>,
+            alpha_netuid: NetUid,
+            beta_netuid: NetUid,
+        ) -> DispatchResult {
+            // Permission check: alpha subnet owner or root
+            let maybe_owner =
+                pallet_subtensor::Pallet::<T>::ensure_subnet_owner_or_root(origin, alpha_netuid)?;
+            let proposer = maybe_owner
+                .unwrap_or_else(|| pallet_subtensor::Pallet::<T>::get_subnet_owner(alpha_netuid));
+
+            pallet_subtensor::Pallet::<T>::do_propose_merger(proposer, alpha_netuid, beta_netuid)?;
+            log::debug!("sudo_propose_merger( alpha: {alpha_netuid:?}, beta: {beta_netuid:?} )");
+            Ok(())
+        }
+
+        /// Approves a pending merger proposal as the beta subnet owner.
+        ///
+        /// # Arguments
+        /// * `origin` - The origin of the call, which must be root or the beta subnet owner.
+        /// * `alpha_netuid` - The netuid of the alpha subnet in the proposal.
+        /// * `beta_netuid` - The netuid of the beta subnet in the proposal.
+        ///
+        /// # Errors
+        /// * `BadOrigin` - If the caller is not root or the beta subnet owner.
+        /// * `NoMergerProposal` - If no merger proposal exists.
+        /// * `MergerMismatch` - If the proposal parameters don't match.
+        ///
+        /// # Weight
+        /// Weight accounts for storage reads and writes for merger approval.
+        #[pallet::call_index(85)]
+        #[pallet::weight((
+            Weight::from_parts(20_000_000, 0)
+                .saturating_add(T::DbWeight::get().reads(4_u64))
+                .saturating_add(T::DbWeight::get().writes(2_u64)),
+            DispatchClass::Operational,
+            Pays::Yes
+        ))]
+        pub fn sudo_approve_merger(
+            origin: OriginFor<T>,
+            alpha_netuid: NetUid,
+            beta_netuid: NetUid,
+        ) -> DispatchResult {
+            // Permission check: beta subnet owner or root
+            let maybe_owner =
+                pallet_subtensor::Pallet::<T>::ensure_subnet_owner_or_root(origin, beta_netuid)?;
+            let approver = maybe_owner
+                .unwrap_or_else(|| pallet_subtensor::Pallet::<T>::get_subnet_owner(beta_netuid));
+
+            pallet_subtensor::Pallet::<T>::do_approve_merger(approver, alpha_netuid, beta_netuid)?;
+            log::debug!("sudo_approve_merger( alpha: {alpha_netuid:?}, beta: {beta_netuid:?} )");
+            Ok(())
+        }
+
+        /// Executes an approved merger, consolidating beta subnet into alpha.
+        /// Can be executed by the alpha subnet owner or root.
+        ///
+        /// # Arguments
+        /// * `origin` - The origin of the call, which must be root or alpha subnet owner.
+        /// * `alpha_netuid` - The netuid of the alpha (surviving) subnet.
+        ///
+        /// # Errors
+        /// * `BadOrigin` - If the caller is not root or alpha subnet owner.
+        /// * `NoMergerProposal` - If no merger proposal exists.
+        /// * `MergerNotApproved` - If the merger hasn't been approved by both parties.
+        /// * `InsufficientLiquidity` - If there isn't enough liquidity for safe merger.
+        /// * `RedeemabilityViolation` - If redeemability would not be preserved.
+        ///
+        /// # Weight
+        /// Weight accounts for extensive storage reads/writes during merger execution.
+        /// This includes token conversions, pool consolidation, and subnet cleanup.
+        #[pallet::call_index(86)]
+        #[pallet::weight((
+            Weight::from_parts(500_000_000, 0)
+                .saturating_add(T::DbWeight::get().reads(100_u64))
+                .saturating_add(T::DbWeight::get().writes(100_u64)),
+            DispatchClass::Operational,
+            Pays::Yes
+        ))]
+        pub fn sudo_execute_merger(origin: OriginFor<T>, alpha_netuid: NetUid) -> DispatchResult {
+            // Permission check: alpha subnet owner or root
+            let _maybe_owner =
+                pallet_subtensor::Pallet::<T>::ensure_subnet_owner_or_root(origin, alpha_netuid)?;
+
+            pallet_subtensor::Pallet::<T>::do_execute_merger_extrinsic(alpha_netuid)?;
+            log::debug!("sudo_execute_merger( alpha: {alpha_netuid:?} )");
+            Ok(())
+        }
+
+        /// Cancels a pending merger proposal.
+        ///
+        /// # Arguments
+        /// * `origin` - The origin of the call, which must be root or the alpha subnet owner.
+        /// * `alpha_netuid` - The netuid of the alpha subnet in the proposal.
+        ///
+        /// # Errors
+        /// * `BadOrigin` - If the caller is not root or the alpha subnet owner.
+        /// * `NoMergerProposal` - If no merger proposal exists.
+        /// * `MergerAlreadyExecuting` - If the merger is already executing.
+        ///
+        /// # Weight
+        /// Weight accounts for storage reads and writes for merger cancellation.
+        #[pallet::call_index(87)]
+        #[pallet::weight((
+            Weight::from_parts(15_000_000, 0)
+                .saturating_add(T::DbWeight::get().reads(3_u64))
+                .saturating_add(T::DbWeight::get().writes(2_u64)),
+            DispatchClass::Operational,
+            Pays::Yes
+        ))]
+        pub fn sudo_cancel_merger(origin: OriginFor<T>, alpha_netuid: NetUid) -> DispatchResult {
+            // Permission check: alpha subnet owner or root
+            let maybe_owner =
+                pallet_subtensor::Pallet::<T>::ensure_subnet_owner_or_root(origin, alpha_netuid)?;
+            let cancelled_by = maybe_owner
+                .unwrap_or_else(|| pallet_subtensor::Pallet::<T>::get_subnet_owner(alpha_netuid));
+
+            pallet_subtensor::Pallet::<T>::do_cancel_merger(cancelled_by, alpha_netuid)?;
+            log::debug!("sudo_cancel_merger( alpha: {alpha_netuid:?} )");
+            Ok(())
+        }
     }
 }
 

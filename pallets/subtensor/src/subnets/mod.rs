@@ -1,6 +1,7 @@
 use super::*;
 pub mod leasing;
 pub mod mechanism;
+pub mod merger;
 pub mod registration;
 pub mod serving;
 pub mod subnet;

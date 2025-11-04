@@ -14,6 +14,7 @@ mod evm;
 mod leasing;
 mod math;
 mod mechanism;
+mod merger;
 mod migration;
 mod mock;
 mod move_stake;

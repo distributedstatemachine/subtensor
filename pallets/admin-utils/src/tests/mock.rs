@@ -535,3 +535,14 @@ pub fn add_network(netuid: NetUid, tempo: u16) {
     SubtensorModule::set_network_registration_allowed(netuid, true);
     SubtensorModule::set_network_pow_registration_allowed(netuid, true);
 }
+
+#[allow(dead_code)]
+pub fn setup_reserves(
+    netuid: NetUid,
+    tao: TaoCurrency,
+    alpha: subtensor_runtime_common::AlphaCurrency,
+) {
+    use pallet_subtensor::{SubnetAlphaIn, SubnetTAO};
+    SubnetTAO::<Test>::set(netuid, tao);
+    SubnetAlphaIn::<Test>::set(netuid, alpha);
+}
