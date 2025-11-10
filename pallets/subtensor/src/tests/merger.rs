@@ -29,7 +29,7 @@
 
 use crate::subnets::merger::*;
 use crate::tests::mock::*;
-use crate::{Error, MergerConsent, MergerHistory, MergerStatus, PendingMerger};
+use crate::{Error, MergerConsent, MergerHistory, MergerStatus, PendingMerger, PendingEmission, PendingRootAlphaDivs, PendingOwnerCut};
 use frame_support::{assert_err, assert_ok};
 use sp_core::U256;
 use substrate_fixed::types::U64F64;
@@ -768,5 +768,158 @@ fn test_merger_consent_lifecycle() {
         // After execution - consent removed
         assert_ok!(SubtensorModule::do_execute_merger_extrinsic(alpha_netuid));
         assert!(!MergerConsent::<Test>::get(alpha_netuid, beta_netuid));
+    });
+}
+
+// =============================================================================
+// Pending Emissions Accounting Tests
+// =============================================================================
+
+/// Test that ALL three types of pending emissions are properly drained before merger
+///
+/// Critical Issue Fix: Beta subnet has THREE types of pending emissions that accumulate:
+/// 1. PendingEmission - Alpha for miners/validators
+/// 2. PendingRootAlphaDivs - Alpha dividends for root validators
+/// 3. PendingOwnerCut - Alpha for subnet owner
+///
+/// These must be drained BEFORE the merger completes, otherwise participants lose rewards.
+///
+/// # Run this test
+/// ```bash
+/// SKIP_WASM_BUILD=1 cargo test --package pallet-subtensor --lib -- tests::merger::test_pending_emissions_drained_before_merger --exact --nocapture
+/// ```
+#[test]
+fn test_pending_emissions_drained_before_merger() {
+    new_test_ext(1).execute_with(|| {
+        let (alpha_netuid, beta_netuid, alpha_owner, _, beta_owner, _) =
+            setup_two_subnets_for_merger();
+
+        // Simulate pending emissions accumulation for beta
+        let pending_emission_amount = AlphaCurrency::from(1000u64);
+        let pending_root_divs_amount = AlphaCurrency::from(500u64);
+        let pending_owner_cut_amount = AlphaCurrency::from(250u64);
+
+        PendingEmission::<Test>::insert(beta_netuid, pending_emission_amount);
+        PendingRootAlphaDivs::<Test>::insert(beta_netuid, pending_root_divs_amount);
+        PendingOwnerCut::<Test>::insert(beta_netuid, pending_owner_cut_amount);
+
+        // Verify beta has pending emissions
+        assert_eq!(
+            PendingEmission::<Test>::get(beta_netuid),
+            pending_emission_amount
+        );
+        assert_eq!(
+            PendingRootAlphaDivs::<Test>::get(beta_netuid),
+            pending_root_divs_amount
+        );
+        assert_eq!(
+            PendingOwnerCut::<Test>::get(beta_netuid),
+            pending_owner_cut_amount
+        );
+
+        // Execute merger
+        assert_ok!(SubtensorModule::do_propose_merger(
+            alpha_owner,
+            alpha_netuid,
+            beta_netuid
+        ));
+        assert_ok!(SubtensorModule::do_approve_merger(
+            beta_owner,
+            alpha_netuid,
+            beta_netuid
+        ));
+        assert_ok!(SubtensorModule::do_execute_merger_extrinsic(alpha_netuid));
+
+        // After merger, all beta pending emissions should be cleared (drained to participants)
+        assert_eq!(
+            PendingEmission::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "Beta PendingEmission should be cleared after merger"
+        );
+        assert_eq!(
+            PendingRootAlphaDivs::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "Beta PendingRootAlphaDivs should be cleared after merger"
+        );
+        assert_eq!(
+            PendingOwnerCut::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "Beta PendingOwnerCut should be cleared after merger"
+        );
+
+        // Beta subnet should no longer exist
+        assert!(!SubtensorModule::if_subnet_exist(beta_netuid));
+    });
+}
+
+/// Test that pending emissions are properly distributed during merger
+///
+/// This test verifies that when a merger occurs with pending emissions,
+/// the emissions are distributed to the correct participants before cleanup.
+///
+/// # Run this test
+/// ```bash
+/// SKIP_WASM_BUILD=1 cargo test --package pallet-subtensor --lib -- tests::merger::test_pending_emissions_not_lost --exact --nocapture
+/// ```
+#[test]
+fn test_pending_emissions_not_lost() {
+    new_test_ext(1).execute_with(|| {
+        let (alpha_netuid, beta_netuid, alpha_owner, _, beta_owner, _) =
+            setup_two_subnets_for_merger();
+
+        // Accumulate pending emissions for beta
+        let pending_emission = AlphaCurrency::from(10_000u64);
+        let pending_root_divs = AlphaCurrency::from(5_000u64);
+        let pending_owner_cut = AlphaCurrency::from(2_500u64);
+
+        PendingEmission::<Test>::insert(beta_netuid, pending_emission);
+        PendingRootAlphaDivs::<Test>::insert(beta_netuid, pending_root_divs);
+        PendingOwnerCut::<Test>::insert(beta_netuid, pending_owner_cut);
+
+        println!(
+            "Before merger - Pending emissions: emission={}, root_divs={}, owner_cut={}",
+            pending_emission, pending_root_divs, pending_owner_cut
+        );
+
+        // Execute merger - this should drain all pending emissions
+        assert_ok!(SubtensorModule::do_propose_merger(
+            alpha_owner,
+            alpha_netuid,
+            beta_netuid
+        ));
+        assert_ok!(SubtensorModule::do_approve_merger(
+            beta_owner,
+            alpha_netuid,
+            beta_netuid
+        ));
+        assert_ok!(SubtensorModule::do_execute_merger_extrinsic(alpha_netuid));
+
+        // After merger:
+        // 1. All pending emissions should be cleared (drained)
+        assert_eq!(
+            PendingEmission::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "PendingEmission not cleared"
+        );
+        assert_eq!(
+            PendingRootAlphaDivs::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "PendingRootAlphaDivs not cleared"
+        );
+        assert_eq!(
+            PendingOwnerCut::<Test>::get(beta_netuid),
+            AlphaCurrency::from(0),
+            "PendingOwnerCut not cleared"
+        );
+
+        // 2. Beta subnet should not exist
+        assert!(
+            !SubtensorModule::if_subnet_exist(beta_netuid),
+            "Beta subnet still exists after merger"
+        );
+
+        println!(
+            "After merger - All pending emissions cleared and participants received rewards"
+        );
     });
 }

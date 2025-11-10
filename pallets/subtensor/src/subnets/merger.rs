@@ -708,18 +708,39 @@ impl<T: Config> Pallet<T> {
             *alpha = new_alpha.into();
         });
 
-        // Step 5: Transfer any pending emissions from beta to alpha
-        let pending_beta = PendingEmission::<T>::take(beta_netuid);
-        if !pending_beta.is_zero() {
-            PendingEmission::<T>::mutate(alpha_netuid, |p| {
-                *p = p.saturating_add(pending_beta);
-            });
+        // Step 5: Drain all pending emissions from beta before merger
+        // Beta subnet participants must receive their accumulated emissions
+        // before the subnet ceases to exist
+        let pending_emission = PendingEmission::<T>::get(beta_netuid);
+        let pending_root_alpha = PendingRootAlphaDivs::<T>::get(beta_netuid);
+        let pending_owner_cut = PendingOwnerCut::<T>::get(beta_netuid);
 
+        let total_alpha = pending_emission.saturating_add(pending_root_alpha);
+
+        if !total_alpha.is_zero() || !pending_owner_cut.is_zero() {
             log::info!(
                 target: LOG_TARGET,
-                "Redirected {} pending emission from beta to alpha",
-                pending_beta
+                "Draining beta pending emissions before merger: emission={}, root_divs={}, owner_cut={}",
+                pending_emission, pending_root_alpha, pending_owner_cut
             );
+
+            // Drain all three types of pending emissions
+            // This ensures:
+            // - Beta miners/validators get their rewards
+            // - Root validators get their dividends
+            // - Beta owner gets their cut
+            Self::drain_pending_emission(
+                beta_netuid,
+                pending_emission,
+                pending_root_alpha,
+                total_alpha,
+                pending_owner_cut,
+            );
+
+            // Clear the storage after draining
+            PendingEmission::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
+            PendingRootAlphaDivs::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
+            PendingOwnerCut::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
         }
 
         // Step 6: Clear beta pool reserves
@@ -787,8 +808,10 @@ impl<T: Config> Pallet<T> {
         // Clear base subnet state (mechanism-independent storage)
         Active::<T>::remove(beta_netuid);
 
-        // Clear emission-related data
+        // Clear emission-related data (already drained in consolidate_pools)
         PendingEmission::<T>::remove(beta_netuid);
+        PendingRootAlphaDivs::<T>::remove(beta_netuid);
+        PendingOwnerCut::<T>::remove(beta_netuid);
 
         // Clear mechanism metadata
         SubnetMechanism::<T>::remove(beta_netuid);

@@ -16,6 +16,7 @@ mod math;
 mod mechanism;
 mod merger;
 mod migration;
+mod simulations;
 mod mock;
 mod move_stake;
 mod networks;

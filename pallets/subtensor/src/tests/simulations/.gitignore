@@ -1,0 +1,14 @@
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test outputs
+*.txt
+*.log
+
+# Generated graphs (saved elsewhere)
+*.png
+merger_flow_graphs/
