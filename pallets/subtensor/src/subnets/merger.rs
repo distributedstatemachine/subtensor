@@ -15,7 +15,8 @@ use alloc::collections::BTreeMap;
 use frame_support::ensure;
 use sp_runtime::DispatchResult;
 use substrate_fixed::types::{U64F64, U96F32};
-use subtensor_runtime_common::{AlphaCurrency, MechId, NetUid, TaoCurrency};
+use subtensor_runtime_common::{AlphaCurrency, NetUid, TaoCurrency};
+use subtensor_swap_interface::SwapHandler;
 
 const LOG_TARGET: &str = "runtime::subtensor::merger";
 
@@ -228,7 +229,11 @@ impl<T: Config> Pallet<T> {
             beta_netuid
         );
 
-        // Step 1: Take snapshots of pool states
+        // Step 0: Prepare pools for merger (clean state)
+        // This MUST happen before snapshots to ensure accurate conversion rates
+        Self::prepare_pools_for_merger(alpha_netuid, beta_netuid)?;
+
+        // Step 1: Take snapshots of pool states (now clean - no LPs, no pending emissions)
         let alpha_snapshot = Self::snapshot_pool(alpha_netuid)?;
         let beta_snapshot = Self::snapshot_pool(beta_netuid)?;
 
@@ -274,10 +279,95 @@ impl<T: Config> Pallet<T> {
             &conversions,
         )?;
 
-        // Step 7: Clean up beta subnet state
-        Self::cleanup_merged_subnet(beta_netuid)?;
+        // Step 7: Clean up beta subnet state using existing dissolve logic
+        // This handles all cleanup: finalize dividends, destroy stakes, clear liquidity, remove network
+        // Note: LPs and emissions were already handled in prepare_pools_for_merger()
+        Self::do_dissolve_network(beta_netuid)?;
 
         log::info!(target: LOG_TARGET, "Core merger completed successfully");
+
+        Ok(())
+    }
+
+    // ========================
+    // Pool Preparation Functions
+    // ========================
+
+    /// Prepare both pools for merger by cleaning their state
+    ///
+    /// This function MUST be called before taking snapshots to ensure accurate conversion rates.
+    /// It performs two critical cleanup operations:
+    /// 1. Drains all pending emissions for both subnets
+    /// 2. Dissolves all LP positions, converting them to stake
+    ///
+    /// After this function completes, the pool reserves represent ONLY staked amounts,
+    /// not LP positions or pending emissions. This ensures conversion rates are calculated
+    /// fairly for all stakers.
+    fn prepare_pools_for_merger(alpha_netuid: NetUid, beta_netuid: NetUid) -> DispatchResult {
+        log::info!(
+            target: LOG_TARGET,
+            "Preparing pools for merger: alpha={:?}, beta={:?}",
+            alpha_netuid,
+            beta_netuid
+        );
+
+        // Step 1: Drain pending emissions for both subnets
+        // This ensures all participants get their accumulated rewards BEFORE
+        // conversion rates are calculated
+        Self::drain_subnet_pending_emissions(alpha_netuid)?;
+        Self::drain_subnet_pending_emissions(beta_netuid)?;
+
+        // Step 2: Dissolve all LP positions for both subnets
+        // This returns TAO to LP holders and converts their Alpha to stake
+        // After this, pool reserves (SubnetTaoProvided, SubnetAlphaInProvided) are cleared
+        T::SwapInterface::dissolve_all_liquidity_providers(alpha_netuid)?;
+        T::SwapInterface::dissolve_all_liquidity_providers(beta_netuid)?;
+
+        log::info!(
+            target: LOG_TARGET,
+            "Pools prepared: emissions drained and LP positions dissolved for both subnets"
+        );
+
+        Ok(())
+    }
+
+    /// Drain all pending emissions for a single subnet
+    ///
+    /// This distributes:
+    /// - Pending miner/validator rewards (PendingEmission)
+    /// - Pending root dividends (PendingRootAlphaDivs)
+    /// - Pending owner cut (PendingOwnerCut)
+    fn drain_subnet_pending_emissions(netuid: NetUid) -> DispatchResult {
+        let pending_emission = PendingEmission::<T>::get(netuid);
+        let pending_root_alpha = PendingRootAlphaDivs::<T>::get(netuid);
+        let pending_owner_cut = PendingOwnerCut::<T>::get(netuid);
+
+        let total_alpha = pending_emission.saturating_add(pending_root_alpha);
+
+        if !total_alpha.is_zero() || !pending_owner_cut.is_zero() {
+            log::info!(
+                target: LOG_TARGET,
+                "Draining pending emissions for netuid={:?}: emission={}, root_divs={}, owner_cut={}",
+                netuid,
+                pending_emission,
+                pending_root_alpha,
+                pending_owner_cut
+            );
+
+            // Drain all three types of pending emissions
+            Self::drain_pending_emission(
+                netuid,
+                pending_emission,
+                pending_root_alpha,
+                total_alpha,
+                pending_owner_cut,
+            );
+
+            // Clear the storage after draining
+            PendingEmission::<T>::insert(netuid, AlphaCurrency::ZERO);
+            PendingRootAlphaDivs::<T>::insert(netuid, AlphaCurrency::ZERO);
+            PendingOwnerCut::<T>::insert(netuid, AlphaCurrency::ZERO);
+        }
 
         Ok(())
     }
@@ -708,42 +798,9 @@ impl<T: Config> Pallet<T> {
             *alpha = new_alpha.into();
         });
 
-        // Step 5: Drain all pending emissions from beta before merger
-        // Beta subnet participants must receive their accumulated emissions
-        // before the subnet ceases to exist
-        let pending_emission = PendingEmission::<T>::get(beta_netuid);
-        let pending_root_alpha = PendingRootAlphaDivs::<T>::get(beta_netuid);
-        let pending_owner_cut = PendingOwnerCut::<T>::get(beta_netuid);
-
-        let total_alpha = pending_emission.saturating_add(pending_root_alpha);
-
-        if !total_alpha.is_zero() || !pending_owner_cut.is_zero() {
-            log::info!(
-                target: LOG_TARGET,
-                "Draining beta pending emissions before merger: emission={}, root_divs={}, owner_cut={}",
-                pending_emission, pending_root_alpha, pending_owner_cut
-            );
-
-            // Drain all three types of pending emissions
-            // This ensures:
-            // - Beta miners/validators get their rewards
-            // - Root validators get their dividends
-            // - Beta owner gets their cut
-            Self::drain_pending_emission(
-                beta_netuid,
-                pending_emission,
-                pending_root_alpha,
-                total_alpha,
-                pending_owner_cut,
-            );
-
-            // Clear the storage after draining
-            PendingEmission::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
-            PendingRootAlphaDivs::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
-            PendingOwnerCut::<T>::insert(beta_netuid, AlphaCurrency::ZERO);
-        }
-
-        // Step 6: Clear beta pool reserves
+        // Step 5: Clear beta pool reserves
+        // Note: Pending emissions were already drained in prepare_pools_for_merger()
+        // Note: LP positions were already dissolved in prepare_pools_for_merger()
         SubnetTAO::<T>::remove(beta_netuid);
         SubnetTaoProvided::<T>::remove(beta_netuid);
         SubnetAlphaIn::<T>::remove(beta_netuid);
@@ -769,73 +826,4 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 
-    /// Clean up all state for the merged (beta) subnet
-    ///
-    /// IMPORTANT: After cleanup, the beta netuid becomes AVAILABLE for re-registration
-    /// A new team can register a new subnet with this netuid by paying the lock cost
-    /// The MergerHistory entry is PERMANENT and tracks that this netuid was previously merged
-    fn cleanup_merged_subnet(beta_netuid: NetUid) -> DispatchResult {
-        // Clear subnet metadata
-        SubnetOwner::<T>::remove(beta_netuid);
-        SubnetLocked::<T>::remove(beta_netuid);
-
-        // Remove from active networks list
-        // This makes the netuid available for re-registration
-        NetworksAdded::<T>::remove(beta_netuid);
-
-        // Decrement network counter
-        TotalNetworks::<T>::mutate(|n| *n = n.saturating_sub(1));
-
-        // Clear ALL mechanisms (sub-subnets) if they exist
-        // This is critical - we must clean up all mechanism storage, not just mechanism 0
-        let mechanism_count = MechanismCountCurrent::<T>::get(beta_netuid);
-        if mechanism_count > 0u8.into() {
-            // Clean up all mechanisms from 0 to mechanism_count
-            for mecid_u8 in 0..u8::from(mechanism_count) {
-                let netuid_index =
-                    Self::get_mechanism_storage_index(beta_netuid, MechId::from(mecid_u8));
-
-                // Clean up per-mechanism storage
-                let _ = Weights::<T>::clear_prefix(netuid_index, u32::MAX, None);
-                Incentive::<T>::remove(netuid_index);
-                LastUpdate::<T>::remove(netuid_index);
-                let _ = Bonds::<T>::clear_prefix(netuid_index, u32::MAX, None);
-                let _ = WeightCommits::<T>::clear_prefix(netuid_index, u32::MAX, None);
-                let _ = TimelockedWeightCommits::<T>::clear_prefix(netuid_index, u32::MAX, None);
-            }
-        }
-
-        // Clear base subnet state (mechanism-independent storage)
-        Active::<T>::remove(beta_netuid);
-
-        // Clear emission-related data (already drained in consolidate_pools)
-        PendingEmission::<T>::remove(beta_netuid);
-        PendingRootAlphaDivs::<T>::remove(beta_netuid);
-        PendingOwnerCut::<T>::remove(beta_netuid);
-
-        // Clear mechanism metadata
-        SubnetMechanism::<T>::remove(beta_netuid);
-        MechanismCountCurrent::<T>::remove(beta_netuid);
-        MechanismEmissionSplit::<T>::remove(beta_netuid);
-
-        // Clear other subnet-specific data
-        MaxAllowedUids::<T>::remove(beta_netuid);
-        NetworkRegistrationAllowed::<T>::remove(beta_netuid);
-        TargetRegistrationsPerInterval::<T>::remove(beta_netuid);
-
-        // NOTE: MergerHistory is NOT cleared - it remains permanently
-        // This allows tracking that this netuid was previously used and merged
-
-        Self::deposit_event(Event::SubnetCleaned {
-            netuid: beta_netuid,
-        });
-
-        log::info!(
-            target: LOG_TARGET,
-            "Beta subnet {:?} cleaned up. Netuid is now available for re-registration.",
-            beta_netuid
-        );
-
-        Ok(())
-    }
 }
