@@ -266,5 +266,33 @@ mod errors {
         InvalidRootClaimThreshold,
         /// Exceeded subnet limit number or zero.
         InvalidSubnetNumber,
+
+        // Subnet Merger Errors
+        /// Cannot merge a subnet with itself
+        CannotMergeWithSelf,
+        /// Subnet has already been merged
+        SubnetAlreadyMerged,
+        /// A merger proposal already exists for this subnet
+        MergerAlreadyPending,
+        /// No merger proposal found
+        NoMergerProposal,
+        /// Merger proposal parameters don't match
+        MergerMismatch,
+        /// Invalid merger status for this operation
+        InvalidMergerStatus,
+        /// Merger has not been approved by both parties
+        MergerNotApproved,
+        /// Merger is already executing, cannot cancel
+        MergerAlreadyExecuting,
+        /// Redeemability would not be preserved
+        RedeemabilityViolation,
+        /// Zero price detected in pool
+        ZeroPrice,
+        /// Price discrepancy between pools is too large
+        ExcessivePriceDiscrepancy,
+        /// Invalid merger direction (beta should not be larger than alpha)
+        InvalidMergerDirection,
+        /// Combined reserves would overflow
+        ReserveOverflow,
     }
 }
