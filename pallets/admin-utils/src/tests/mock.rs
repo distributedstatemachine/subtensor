@@ -19,7 +19,8 @@ use sp_runtime::{
 };
 use sp_std::cmp::Ordering;
 use sp_weights::Weight;
-use subtensor_runtime_common::{NetUid, TaoCurrency};
+use pallet_subtensor::{SubnetAlphaIn, SubnetTAO};
+use subtensor_runtime_common::{AlphaCurrency, NetUid, TaoCurrency};
 
 type Block = frame_system::mocking::MockBlock<Test>;
 // Configure a mock runtime to test the pallet.
@@ -536,13 +537,7 @@ pub fn add_network(netuid: NetUid, tempo: u16) {
     SubtensorModule::set_network_pow_registration_allowed(netuid, true);
 }
 
-#[allow(dead_code)]
-pub fn setup_reserves(
-    netuid: NetUid,
-    tao: TaoCurrency,
-    alpha: subtensor_runtime_common::AlphaCurrency,
-) {
-    use pallet_subtensor::{SubnetAlphaIn, SubnetTAO};
+pub(crate) fn setup_reserves(netuid: NetUid, tao: TaoCurrency, alpha: AlphaCurrency) {
     SubnetTAO::<Test>::set(netuid, tao);
     SubnetAlphaIn::<Test>::set(netuid, alpha);
 }
